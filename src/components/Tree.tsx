@@ -12,6 +12,7 @@ export const BASE_Y = 292;
 export const LEAF_PATH = 'M12 2C6 6 4 12 6 18c1 3 4 4 6 4s5-1 6-4c2-6 0-12-6-16z';
 
 const MAX_DEPTH = 5;
+const FALLEN_SQUASH = 0.6;
 const DEG = Math.PI / 180;
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -121,15 +122,55 @@ function leafPath(x: number, y: number, angle: number, size: number): string {
   return `M${x.toFixed(1)} ${y.toFixed(1)}Q${(mx + bx).toFixed(1)} ${(my + by).toFixed(1)} ${tipX.toFixed(1)} ${tipY.toFixed(1)}Q${(mx - bx).toFixed(1)} ${(my - by).toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}Z`;
 }
 
+/** What's left of a destroyed tree: a snapped stump, with broken branches and dead leaves on the ground. */
+function wreckage(t: number, seed: number) {
+  const w = Math.max(2.4, 1.6 + 13 * Math.pow(t, 1.3));
+  const len = 5 + 62 * Math.pow(t, 0.75);
+  const h = Math.max(3, len * 0.36);
+  const left = BASE_X - w / 2;
+  // Splintered top: alternating high and low points across the break.
+  const top = Array.from({ length: 6 }, (_, i) => {
+    const y = BASE_Y - h * (i % 2 ? 0.55 + 0.2 * rnd(seed, 90 + i, 1) : 0.8 + 0.2 * rnd(seed, 90 + i, 1));
+    return `L${(left + (w * i) / 5).toFixed(1)} ${y.toFixed(1)}`;
+  }).join('');
+  const stump = `M${left.toFixed(1)} ${BASE_Y + 1}${top}L${(left + w).toFixed(1)} ${BASE_Y + 1}Z`;
+
+  const sticks = Array.from({ length: 4 }, (_, i) => {
+    const side = i % 2 ? 1 : -1;
+    const l = len * (0.22 + 0.25 * rnd(seed, 95 + i, 2));
+    const cx = BASE_X + side * (w + l * 0.7 + len * (0.2 + 0.45 * rnd(seed, 95 + i, 1)));
+    const cy = BASE_Y + 1 + rnd(seed, 95 + i, 3) * 4;
+    const a = (rnd(seed, 95 + i, 4) - 0.5) * 20 * DEG;
+    const dx = (Math.cos(a) * l) / 2;
+    const dy = (Math.sin(a) * l) / 2;
+    return { d: `M${(cx - dx).toFixed(1)} ${(cy - dy).toFixed(1)}L${(cx + dx).toFixed(1)} ${(cy + dy).toFixed(1)}`, w: Math.max(0.8, w * (0.4 - 0.06 * i)) };
+  });
+
+  const leafColors = ['#C98B3A', '#A8642B', '#D9A441'];
+  const leaves = Array.from({ length: 8 }, (_, i) => ({
+    d: leafPath(
+      BASE_X + (i % 2 ? 1 : -1) * (w + 4 + rnd(seed, 110 + i, 1) * (len * 1.1 + 12)),
+      BASE_Y + 1 + rnd(seed, 110 + i, 2) * 5,
+      rnd(seed, 110 + i, 3) * Math.PI * 2,
+      3.5 + len * 0.1,
+    ),
+    fill: leafColors[i % 3],
+  }));
+
+  return { stump, w, h, sticks, leaves };
+}
+
 interface Props {
   growth: Growth;
   species: Species;
   seed: number;
   width: number;
   height?: number;
+  fall?: number; // 0 standing → 1 lying on the ground (one missed day)
+  dead?: boolean; // destroyed (two missed days): `growth` is the tree that was lost
 }
 
-function TreeImpl({ growth, species, seed, width, height }: Props) {
+function TreeImpl({ growth, species, seed, width, height, fall = 0, dead = false }: Props) {
   const { t, bloom, fruit, ripe, mature, old, ancient } = growth;
   const h = height ?? (width * VIEW_H) / VIEW_W;
 
@@ -254,14 +295,47 @@ function TreeImpl({ growth, species, seed, width, height }: Props) {
         }))
       : [];
 
+    // Lying pose: rotated 90° about the base (crown to the right) and squashed a little, as if the canopy
+    // crumpled on landing. Centered, and lifted just enough that the lower branches stay in view.
+    let minX = 0;
+    let maxX = 0;
+    let maxY = 0;
+    const addPoint = (x: number, y: number, r: number) => {
+      const rx = BASE_Y - y; // rotate 90°: up becomes right, right becomes down
+      const ry = (x - BASE_X) * FALLEN_SQUASH;
+      minX = Math.min(minX, rx - r);
+      maxX = Math.max(maxX, rx + r);
+      maxY = Math.max(maxY, ry + r * FALLEN_SQUASH);
+    };
+    const pad = 16 * sproutAlpha;
+    segments.forEach((sg) => {
+      const [x0, y0, , , x2, y2] = sg.d.slice(1).split(/[ Q]/).map(Number);
+      addPoint(x0, y0, sg.w / 2);
+      addPoint(x2, y2, Math.max(sg.w / 2, pad));
+    });
+    blobs.forEach((b) => addPoint(b.x, b.y, b.r * 1.05 + 3));
+    const fallen = { tx: -(minX + maxX) / 2, ty: -Math.max(0, maxY - 20) };
+
     return {
       segments, sproutLeaves, blobs, flowers, fruits, bark, barkLight, sproutAlpha, leafDark, leafBase, leafLight,
-      roots, moss, glow, sparkles,
+      roots, moss, glow, sparkles, fallen,
     };
   }, [t, bloom, fruit, ripe, mature, old, ancient, seed, species]);
 
+  const wreck = useMemo(() => (dead ? wreckage(t, seed) : null), [dead, t, seed]);
+
+  // A fallen tree wilts: leaves fade toward brown and the ancient glow goes out.
+  const wilt = 0.45 * fall;
+  const leafDark = mixColor(art.leafDark, '#5E5230', wilt);
+  const leafBase = mixColor(art.leafBase, '#8A7A3E', wilt);
+  const leafLight = mixColor(art.leafLight, '#A89656', wilt);
+  const pose = fall > 0
+    ? `translate(${(BASE_X + art.fallen.tx * fall).toFixed(2)} ${(BASE_Y + art.fallen.ty * fall).toFixed(2)}) ` +
+      `scale(1 ${(1 - (1 - FALLEN_SQUASH) * fall).toFixed(3)}) rotate(${(90 * fall).toFixed(2)}) translate(${-BASE_X} ${-BASE_Y})`
+    : undefined;
+
   // The seed stays visible for the first days, cracking open as the shoot emerges.
-  const seedAlpha = 1 - smooth(0.08, 0.16, t);
+  const seedAlpha = dead ? 0 : 1 - smooth(0.08, 0.16, t);
 
   // Camera: start zoomed in on the seed and pull back as the tree grows.
   const zoom = 1 + 1.6 * (1 - smooth(0, 0.5, t));
@@ -286,6 +360,24 @@ function TreeImpl({ growth, species, seed, width, height }: Props) {
         </G>
       )}
 
+      {wreck && (
+        <G>
+          {wreck.leaves.map((l, i) => (
+            <Path key={`wl${i}`} d={l.d} fill={l.fill} />
+          ))}
+          {wreck.sticks.map((st, i) => (
+            <Path key={`ws${i}`} d={st.d} stroke="#8A6A52" strokeWidth={st.w} strokeLinecap="round" />
+          ))}
+          <Path d={wreck.stump} fill="#6B4E3A" stroke="#4A3526" strokeWidth={Math.max(0.5, wreck.w * 0.06)} strokeLinejoin="round" />
+          <Path
+            d={`M${BASE_X - wreck.w * 0.18} ${BASE_Y}L${BASE_X - wreck.w * 0.12} ${BASE_Y - wreck.h * 0.55}`}
+            stroke="#8E6A4E" strokeWidth={wreck.w * 0.14} strokeLinecap="round"
+          />
+        </G>
+      )}
+
+      {!dead && (
+      <G transform={pose}>
       {art.glow && (
         <>
           <Defs>
@@ -294,7 +386,7 @@ function TreeImpl({ growth, species, seed, width, height }: Props) {
               <Stop offset="1" stopColor="#FFE38A" stopOpacity={0} />
             </RadialGradient>
           </Defs>
-          <Ellipse cx={art.glow.x} cy={art.glow.y} rx={art.glow.rx} ry={art.glow.ry} fill={`url(#ancientGlow${seed})`} />
+          <Ellipse cx={art.glow.x} cy={art.glow.y} rx={art.glow.rx} ry={art.glow.ry} fill={`url(#ancientGlow${seed})`} opacity={1 - fall} />
         </>
       )}
 
@@ -322,13 +414,13 @@ function TreeImpl({ growth, species, seed, width, height }: Props) {
       )}
 
       {art.blobs.map((b) => (
-        <Circle key={`fs${b.key}`} cx={b.x + 2} cy={b.y + 3} r={b.r * 1.05} fill={art.leafDark} />
+        <Circle key={`fs${b.key}`} cx={b.x + 2} cy={b.y + 3} r={b.r * 1.05} fill={leafDark} />
       ))}
       {art.blobs.map((b) => (
-        <Circle key={`fb${b.key}`} cx={b.x} cy={b.y} r={b.r} fill={art.leafBase} />
+        <Circle key={`fb${b.key}`} cx={b.x} cy={b.y} r={b.r} fill={leafBase} />
       ))}
       {art.blobs.map((b) => (
-        <Circle key={`fh${b.key}`} cx={b.x - b.r * 0.3} cy={b.y - b.r * 0.35} r={b.r * 0.5} fill={art.leafLight} opacity={0.85} />
+        <Circle key={`fh${b.key}`} cx={b.x - b.r * 0.3} cy={b.y - b.r * 0.35} r={b.r * 0.5} fill={leafLight} opacity={0.85} />
       ))}
 
       {art.flowers.map((f, i) => (
@@ -346,11 +438,13 @@ function TreeImpl({ growth, species, seed, width, height }: Props) {
         </G>
       ))}
       {art.sparkles.map((sp, i) => (
-        <G key={`sp${i}`} opacity={ancient}>
+        <G key={`sp${i}`} opacity={ancient * (1 - fall)}>
           <Circle cx={sp.x} cy={sp.y} r={sp.r * 2} fill="#FFF3B0" opacity={0.35} />
           <Circle cx={sp.x} cy={sp.y} r={sp.r * 0.8} fill="#FFFBE6" />
         </G>
       ))}
+      </G>
+      )}
     </Svg>
   );
 }

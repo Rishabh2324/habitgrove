@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import type { Health } from '../dates';
 import { growthFor, type Species } from '../growth';
 import { useHour } from '../useHour';
 import { BASE_X, BASE_Y, Tree, VIEW_H, VIEW_W } from './Tree';
@@ -159,11 +160,16 @@ interface SceneProps {
   height: number;
   waterSignal: number;
   sky?: SkyMode;
+  health?: Health;
+  lost?: number; // streak of the destroyed tree, drawn as its wreckage
 }
 
-export function Scene({ streak, duration, species, seed, width, height, waterSignal, sky: skyProp }: SceneProps) {
+export function Scene({ streak, duration, species, seed, width, height, waterSignal, sky: skyProp, health = 'healthy', lost = 0 }: SceneProps) {
   const shown = useAnimatedNumber(streak, duration);
-  const growth = growthFor(shown);
+  const dead = health === 'dead';
+  const growth = growthFor(dead ? lost : shown);
+  // Topples over after a missed day and stands back up once watered.
+  const fall = useAnimatedNumber(health === 'fallen' ? 1 : 0, 1300);
   const hour = useHour();
   const skyMode = skyProp ?? skyForHour(hour);
   const sky = SKIES[skyMode];
@@ -179,7 +185,7 @@ export function Scene({ streak, duration, species, seed, width, height, waterSig
   const baseX = treeLeft + (treeW * BASE_X) / VIEW_W;
 
   // Saplings wave in the breeze; big trees barely move.
-  const swayDeg = 3.2 - 2.2 * growth.t;
+  const swayDeg = dead ? 0 : (3.2 - 2.2 * growth.t) * (1 - fall);
   const sway = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -261,10 +267,10 @@ export function Scene({ streak, duration, species, seed, width, height, waterSig
       <Animated.View
         style={[styles.abs, { left: treeLeft, top: treeTop, transformOrigin: `${(BASE_X / VIEW_W) * 100}% ${(BASE_Y / VIEW_H) * 100}%`, transform: [{ rotate }] }]}
       >
-        <Tree growth={growth} species={species} seed={seed} width={treeW} height={treeH} />
+        <Tree growth={growth} species={species} seed={seed} width={treeW} height={treeH} fall={fall} dead={dead} />
       </Animated.View>
 
-      {growth.bloom > 0.3 && petals.map((p, i) => (
+      {growth.bloom > 0.3 && !dead && fall < 0.5 && petals.map((p, i) => (
         <Petal key={i} x={p.x} y={p.y} fall={groundY - p.y} delay={p.delay} color={species.blossom} />
       ))}
       {motes.map((m, i) => <Mote key={i} x={m.x} y={m.y} delay={m.delay} night={night} />)}

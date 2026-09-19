@@ -1,7 +1,7 @@
 import { isRunningInExpoGo } from 'expo';
 import type * as NotificationsModule from 'expo-notifications';
 import { Platform } from 'react-native';
-import { addDays, currentStreak, dayKey } from './dates';
+import { addDays, dayKey, streakStatus, type StreakStatus } from './dates';
 import type { Habit, Reminder } from './store';
 
 // Local notifications aren't available on web, and on Android, Expo Go (SDK 53+) throws as soon as
@@ -89,7 +89,7 @@ async function rebuild(habits: Habit[]) {
       jobs.push(
         Notifications.scheduleNotificationAsync({
           identifier: `${habit.id}:${key}`,
-          content: { ...message(habit, i === 0 ? currentStreak(done) : 0), data: { habitId: habit.id } },
+          content: { ...message(habit, i === 0 ? streakStatus(done) : null), data: { habitId: habit.id } },
           trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at, channelId: CHANNEL },
         }),
       );
@@ -98,7 +98,15 @@ async function rebuild(habits: Habit[]) {
   await Promise.all(jobs);
 }
 
-function message(habit: Habit, streak: number) {
+/** `status` is today's; later days get the plain nudge since their state isn't known yet. */
+function message(habit: Habit, status: StreakStatus | null) {
+  const streak = status?.streak ?? 0;
+  if (status?.health === 'fallen') {
+    return {
+      title: `🪵 Your “${habit.name}” tree has fallen`,
+      body: `Water it today to stand it back up and save your ${streak}-day streak 💧`,
+    };
+  }
   if (streak > 0) {
     return {
       title: `🔥 Keep your ${streak}-day streak alive`,

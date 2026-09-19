@@ -8,14 +8,15 @@ import { playSfx } from '../sfx';
 import { GardenBackdrop } from '../components/GardenBackdrop';
 import { BASE_Y, hashString, Tree, VIEW_H, VIEW_W } from '../components/Tree';
 import { skyForHour, SKIES, type SkyMode } from '../components/Scene';
-import { currentStreak, dayKey } from '../dates';
+import { dayKey, streakStatus, type StreakStatus } from '../dates';
 import { growthFor, SPECIES, stageFor } from '../growth';
 import { quoteFor } from '../quotes';
 import type { Habit } from '../store';
 import { useHour } from '../useHour';
 import { C } from '../theme';
 
-function MiniScene({ habit, streak, w, h, skyMode }: { habit: Habit; streak: number; w: number; h: number; skyMode: SkyMode }) {
+function MiniScene({ habit, status, w, h, skyMode }: { habit: Habit; status: StreakStatus; w: number; h: number; skyMode: SkyMode }) {
+  const dead = status.health === 'dead';
   const sky = SKIES[skyMode];
   const groundY = h - 22;
   const treeW = w * 0.8;
@@ -34,7 +35,15 @@ function MiniScene({ habit, streak, w, h, skyMode }: { habit: Habit; streak: num
         <Ellipse cx={w / 2} cy={groundY + 3} rx={30} ry={7} fill="#7A4F31" />
       </Svg>
       <View style={{ position: 'absolute', left: (w - treeW) / 2, top: groundY - (treeH * BASE_Y) / VIEW_H }}>
-        <Tree growth={growthFor(streak)} species={SPECIES[habit.species]} seed={hashString(habit.id)} width={treeW} height={treeH} />
+        <Tree
+          growth={growthFor(dead ? status.lost : status.streak)}
+          species={SPECIES[habit.species]}
+          seed={hashString(habit.id)}
+          width={treeW}
+          height={treeH}
+          fall={status.health === 'fallen' ? 1 : 0}
+          dead={dead}
+        />
       </View>
     </View>
   );
@@ -61,8 +70,8 @@ export function GardenScreen({ habits, onOpen, onToggleToday, onPlant }: Props) 
   const quote = quoteFor(today);
 
   const doneToday = habits.filter((h) => h.done.includes(today)).length;
-  const streaks = habits.map((h) => currentStreak(new Set(h.done)));
-  const longest = streaks.length ? Math.max(...streaks) : 0;
+  const statuses = habits.map((h) => streakStatus(new Set(h.done)));
+  const longest = statuses.length ? Math.max(...statuses.map((st) => st.streak)) : 0;
 
   const startPlanting = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -121,7 +130,8 @@ export function GardenScreen({ habits, onOpen, onToggleToday, onPlant }: Props) 
           ) : (
             <View style={[s.grid, { gap }]}>
               {habits.map((h, i) => {
-                const streak = streaks[i];
+                const status = statuses[i];
+                const { streak } = status;
                 const { stage } = stageFor(streak);
                 const done = h.done.includes(today);
                 return (
@@ -130,12 +140,16 @@ export function GardenScreen({ habits, onOpen, onToggleToday, onPlant }: Props) 
                     onPress={() => onOpen(h.id)}
                     style={({ pressed }) => [s.card, { width: cardW }, pressed && { transform: [{ scale: 0.97 }] }]}
                   >
-                    <MiniScene habit={h} streak={streak} w={cardW} h={cardW * 0.95} skyMode={skyMode} />
+                    <MiniScene habit={h} status={status} w={cardW} h={cardW * 0.95} skyMode={skyMode} />
                     <View style={s.cardBody}>
                       <View style={{ flex: 1 }}>
                         <Text style={s.cardName} numberOfLines={1}>{h.name}</Text>
                         <Text style={s.cardMeta} numberOfLines={1}>
-                          {streak > 0 ? `🔥 ${streak} · ` : ''}{stage.name}
+                          {status.health === 'fallen'
+                            ? `🪵 Fallen · 🔥 ${streak}`
+                            : status.health === 'dead'
+                              ? '💀 Destroyed'
+                              : `${streak > 0 ? `🔥 ${streak} · ` : ''}${stage.name}`}
                         </Text>
                       </View>
                       <Pressable

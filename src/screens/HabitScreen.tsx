@@ -6,7 +6,7 @@ import { ReminderCard } from '../components/ReminderCard';
 import { Scene } from '../components/Scene';
 import { UprootConfirm } from '../components/UprootConfirm';
 import { hashString } from '../components/Tree';
-import { addDays, bestStreak, currentStreak, dayKey, parseKey } from '../dates';
+import { addDays, bestStreak, dayKey, parseKey, streakStatus } from '../dates';
 import { SPECIES, STAGES, stageFor } from '../growth';
 import { playSfx, stopSfx } from '../sfx';
 import type { Habit, Reminder } from '../store';
@@ -32,17 +32,17 @@ export function HabitScreen({ habit, onBack, onToggleDay, onDelete, onSetReminde
   const done = useMemo(() => new Set(habit.done), [habit.done]);
   const today = dayKey();
   const doneToday = done.has(today);
-  const streak = currentStreak(done);
+  const { streak, health, lost } = streakStatus(done);
   const best = Math.max(bestStreak(done), streak);
   const { stage, index: stageIndex, next } = stageFor(streak);
   const stageStart = stage.day;
   const progress = next ? (streak - stageStart) / (next.day - stageStart) : 1;
   // Streak is alive from yesterday but today isn't watered yet.
-  const atRisk = !doneToday && streak > 0;
+  const atRisk = health === 'healthy' && !doneToday && streak > 0;
 
   // What the scene is showing. Lags the real streak slightly so the water lands first.
-  // Starts as a seed so opening the tree replays its growth up to today.
-  const [scene, setScene] = useState({ streak: 0, duration: 0 });
+  // Starts as a seed so opening the tree replays its growth up to today (a fallen tree is shown as it lies).
+  const [scene, setScene] = useState({ streak: health === 'healthy' ? 0 : streak, duration: 0 });
   const [waterSignal, setWaterSignal] = useState(0);
   const [timelapse, setTimelapse] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -59,7 +59,7 @@ export function HabitScreen({ habit, onBack, onToggleDay, onDelete, onSetReminde
 
   // Grow from seed to the current streak on open; bigger trees take a little longer.
   useEffect(() => {
-    if (streak > 0) later(() => setScene({ streak: prevStreak.current, duration: 900 + 1600 * Math.min(streak, 66) / 66 }), 250);
+    if (streak > 0 && health === 'healthy') later(() => setScene({ streak: prevStreak.current, duration: 900 + 1600 * Math.min(streak, 66) / 66 }), 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -128,6 +128,8 @@ export function HabitScreen({ habit, onBack, onToggleDay, onDelete, onSetReminde
             width={width}
             height={sceneH + insets.top}
             waterSignal={waterSignal}
+            health={timelapse ? 'healthy' : health}
+            lost={lost}
           />
           <View style={[s.topBar, { top: insets.top + 8, width: contentW }]}>
             <Pressable onPress={onBack} style={s.glassBtn} hitSlop={8}>
@@ -181,6 +183,12 @@ export function HabitScreen({ habit, onBack, onToggleDay, onDelete, onSetReminde
           </Pressable>
           {atRisk && (
             <Text style={s.risk}>Your {streak}-day streak is still alive — water today to keep it growing.</Text>
+          )}
+          {health === 'fallen' && (
+            <Text style={s.risk}>Your tree fell over after a missed day. Water today to stand it back up and keep your {streak}-day streak.</Text>
+          )}
+          {health === 'dead' && (
+            <Text style={s.risk}>Your {lost}-day tree was destroyed after two missed days. Water today to plant a fresh seed.</Text>
           )}
 
           <View style={s.card}>
